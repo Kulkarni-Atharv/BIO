@@ -10,7 +10,8 @@ logger = logging.getLogger("Encoder")
 
 from shared.config import (
     YUNET_PATH, MOBILEFACENET_PATH, 
-    EMBEDDINGS_FILE, NAMES_FILE, KNOWN_FACES_DIR
+    EMBEDDINGS_FILE, NAMES_FILE, KNOWN_FACES_DIR,
+    DETECTION_THRESHOLD
 )
 
 class FaceEncoder:
@@ -32,7 +33,7 @@ class FaceEncoder:
             return
 
         self.detector = cv2.FaceDetectorYN.create(
-            self.yunet_path, "", (320, 320), 0.9, 0.3, 5000
+            self.yunet_path, "", (320, 320), DETECTION_THRESHOLD, 0.3, 5000
         )
         self.recognizer = cv2.dnn.readNetFromONNX(self.mobilefacenet_path)
 

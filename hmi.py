@@ -4,7 +4,8 @@ import cv2
 import os
 import time
 import numpy as np
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+ 
                              QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                              QStackedWidget, QMessageBox, QListWidget)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
@@ -15,7 +16,7 @@ from PyQt5.QtGui import QImage, QPixmap, QFont
 from core.recognizer import FaceRecognizer
 from device.database import LocalDatabase
 from core.face_encoder import FaceEncoder
-from shared.config import DEVICE_ID, KNOWN_FACES_DIR
+from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES
 
 
 # --- Worker Thread for Video & Recognition ---
@@ -50,65 +51,94 @@ class VideoThread(QThread):
             cap = cv2.VideoCapture(0)
         
         last_attendance_time = {}
+        last_recognized_name = None
+        consecutive_frames = 0
         COOLDOWN = 10 # seconds
 
-        while self._run_flag:
-            ret, cv_img = cap.read()
-            if ret:
-                # Logic based on mode
-                if self.mode == "RECOGNITION":
-                    if self.recognizer:
-                        locations, names = self.recognizer.recognize_faces(cv_img)
-                        # Draw and Emit
-                        for (top, right, bottom, left), name in zip(locations, names):
-                            cv2.rectangle(cv_img, (left, top), (right, bottom), (0, 255, 0), 2)
-                            cv2.putText(cv_img, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-                            
-                            if name != "Unknown":
-                                now = time.time()
-                                if name not in last_attendance_time or (now - last_attendance_time[name] > COOLDOWN):
-                                    self.attendance_signal.emit(name)
-                                    last_attendance_time[name] = now
-                
-                elif self.mode == "CAPTURE":
-                    # Just detect to show user face is found
-                    if self.recognizer and self.recognizer.detector:
-                        h, w, _ = cv_img.shape
-                        self.recognizer.detector.setInputSize((w, h))
-                        _, faces = self.recognizer.detector.detect(cv_img)
-                        
-                        if faces is not None:
-                            for face in faces:
-                                box = face[:4].astype(int)
-                                x, y, w_box, h_box = box[0], box[1], box[2], box[3]
-                                cv2.rectangle(cv_img, (x, y), (x+w_box, y+h_box), (255, 0, 0), 2)
-                                
-                                # Capture logic
-                                if self.capture_count < self.capture_target:
-                                    self.capture_count += 1
-                                    # Save
-                                    filename = f"{self.capture_dir}/User.{self.capture_id}.{self.capture_count}.jpg"
-                                    # Ensure bounds
-                                    x = max(0, x); y = max(0, y)
-                                    if w_box > 0 and h_box > 0:
-                                        crop = cv_img[y:y+h_box, x:x+w_box]
-                                        cv2.imwrite(filename, crop)
+        try:
+            while self._run_flag:
+                ret, cv_img = cap.read()
+                if ret:
+                    # Logic based on mode
+                    if self.mode == "RECOGNITION":
+                        if self.recognizer:
+                            locations, names = self.recognizer.recognize_faces(cv_img)
+                            # Draw and Emit
+                            for (top, right, bottom, left), name in zip(locations, names):
+                                if name != "Unknown":
+                                    # Multi-frame verification
+                                    if name == last_recognized_name:
+                                        consecutive_frames += 1
+                                    else:
+                                        last_recognized_name = name
+                                        consecutive_frames = 1
                                     
-                    cv2.putText(cv_img, f"Captured: {self.capture_count}/{self.capture_target}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                    
-                    if self.capture_count >= self.capture_target:
-                        self.mode = "IDLE" # Stop capturing
-                        self.attendance_signal.emit("CAPTURE_COMPLETE")
+                                    # Visual feedback (Yellow for verifying, Green for verified)
+                                    color = (0, 255, 255) # Yellow
+                                    if consecutive_frames >= VERIFICATION_FRAMES:
+                                        color = (0, 255, 0) # Green
+                                        
+                                        now = time.time()
+                                        if name not in last_attendance_time or (now - last_attendance_time[name] > COOLDOWN):
+                                            self.attendance_signal.emit(name)
+                                            last_attendance_time[name] = now
+                                    else:
+                                        pass # Just waiting for more frames
 
-                # Convert to Qt Image
-                rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb_image.shape
-                bytes_per_line = ch * w
-                convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                p = convert_to_Qt_format.scaled(640, 480, Qt.KeepAspectRatio)
-                self.change_pixmap_signal.emit(p)
-            
-        cap.release()
+                                    cv2.rectangle(cv_img, (left, top), (right, bottom), color, 2)
+                                    status_text = f"{name}"
+                                    if consecutive_frames < VERIFICATION_FRAMES:
+                                        status_text += f" ({consecutive_frames}/{VERIFICATION_FRAMES})"
+                                    cv2.putText(cv_img, status_text, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                                else:
+                                     # Unknown face
+                                     cv2.rectangle(cv_img, (left, top), (right, bottom), (0, 0, 255), 2)
+                                     cv2.putText(cv_img, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                        
+                        # Reset counter if no faces found
+                        if not names and last_recognized_name is not None:
+                             last_recognized_name = None
+                             consecutive_frames = 0
+                    
+                    elif self.mode == "CAPTURE":
+                        # Just detect to show user face is found
+                        if self.recognizer and self.recognizer.detector:
+                            h, w, _ = cv_img.shape
+                            self.recognizer.detector.setInputSize((w, h))
+                            _, faces = self.recognizer.detector.detect(cv_img)
+                            
+                            if faces is not None:
+                                for face in faces:
+                                    box = face[:4].astype(int)
+                                    x, y, w_box, h_box = box[0], box[1], box[2], box[3]
+                                    cv2.rectangle(cv_img, (x, y), (x+w_box, y+h_box), (255, 0, 0), 2)
+                                    
+                                    # Capture logic
+                                    if self.capture_count < self.capture_target:
+                                        self.capture_count += 1
+                                        # Save
+                                        filename = f"{self.capture_dir}/User.{self.capture_id}.{self.capture_count}.jpg"
+                                        # Ensure bounds
+                                        x = max(0, x); y = max(0, y)
+                                        if w_box > 0 and h_box > 0:
+                                            crop = cv_img[y:y+h_box, x:x+w_box]
+                                            cv2.imwrite(filename, crop)
+                                        
+                        cv2.putText(cv_img, f"Captured: {self.capture_count}/{self.capture_target}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                        
+                        if self.capture_count >= self.capture_target:
+                            self.mode = "IDLE" # Stop capturing
+                            self.attendance_signal.emit("CAPTURE_COMPLETE")
+
+                    # Convert to Qt Image
+                    rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+                    h, w, ch = rgb_image.shape
+                    bytes_per_line = ch * w
+                    convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                    p = convert_to_Qt_format.scaled(640, 480, Qt.KeepAspectRatio)
+                    self.change_pixmap_signal.emit(p)
+        finally:
+            cap.release()
 
     def start_capture(self, user_id, user_name):
         self.capture_id = user_id

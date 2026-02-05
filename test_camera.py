@@ -21,6 +21,7 @@ def list_ports():
             else:
                 print("Port %s for camera ( %s x %s) is present but does not reads." %(dev_port,h,w))
                 available_ports.append(dev_port)
+            camera.release() # Explicitly release the camera
         dev_port +=1
     return available_ports,working_ports
 

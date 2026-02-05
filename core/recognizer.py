@@ -6,7 +6,8 @@ import numpy as np
 
 from shared.config import (
     YUNET_PATH, MOBILEFACENET_PATH, 
-    EMBEDDINGS_FILE, NAMES_FILE, KNOWN_FACES_DIR
+    EMBEDDINGS_FILE, NAMES_FILE, KNOWN_FACES_DIR,
+    DETECTION_THRESHOLD, RECOGNITION_THRESHOLD
 )
 
 logger = logging.getLogger("Recognizer")
@@ -33,7 +34,7 @@ class FaceRecognizer:
             try:
                 # Initialize YuNet
                 self.detector = cv2.FaceDetectorYN.create(
-                    self.yunet_path, "", (320, 320), 0.9, 0.3, 5000
+                    self.yunet_path, "", (320, 320), DETECTION_THRESHOLD, 0.3, 5000
                 )
                 # Initialize MobileFaceNet
                 self.recognizer = cv2.dnn.readNetFromONNX(self.mobilefacenet_path)
@@ -110,7 +111,7 @@ class FaceRecognizer:
                         max_score = scores[best_idx]
                         
                         # Threshold (Tunable: 0.5 is safe, 0.6 is stricter)
-                        if max_score > 0.5:
+                        if max_score > RECOGNITION_THRESHOLD:
                             name = self.known_names[best_idx]
                             # name = f"{name} ({max_score:.2f})" # Debug
                         
