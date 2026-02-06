@@ -4,6 +4,13 @@ import cv2
 import os
 import time
 import numpy as np
+
+# Try to import picamera2 for Raspberry Pi CSI cameras
+try:
+    from picamera2 import Picamera2
+    PICAMERA2_AVAILABLE = True
+except ImportError:
+    PICAMERA2_AVAILABLE = False
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
  
                              QHBoxLayout, QLabel, QPushButton, QLineEdit, 
@@ -41,14 +48,35 @@ class VideoThread(QThread):
         if self.recognizer is None:
             self.recognizer = FaceRecognizer()
 
-        # Try GStreamer first, fallback to 0
-        gst_pipeline = (
-            "libcamerasrc ! video/x-raw, width=640, height=480, framerate=30/1 ! "
-            "videoconvert ! videoscale ! video/x-raw, format=BGR ! appsink"
-        )
-        cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
-        if not cap.isOpened():
+        # Try multiple camera backends
+        cap = None
+        picam2 = None
+        use_picamera2 = False
+        
+        # Option 1: Try picamera2 for Raspberry Pi CSI camera
+        if PICAMERA2_AVAILABLE:
+            try:
+                picam2 = Picamera2()
+                config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+                picam2.configure(config)
+                picam2.start()
+                use_picamera2 = True
+                print("Using picamera2 for CSI camera")
+            except Exception as e:
+                print(f"picamera2 failed: {e}")
+                use_picamera2 = False
+        
+        # Option 2: Try V4L2 backend (USB cameras on Linux)
+        if not use_picamera2:
             cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        
+        # Option 3: Try default backend
+        if not use_picamera2 and (not cap or not cap.isOpened()):
+            cap = cv2.VideoCapture(0)
+        
+        if not use_picamera2 and (not cap or not cap.isOpened()):
+            print("ERROR: Could not open any camera")
+            return
         
         last_attendance_time = {}
         last_recognized_name = None
@@ -57,7 +85,15 @@ class VideoThread(QThread):
 
         try:
             while self._run_flag:
-                ret, cv_img = cap.read()
+                # Get frame from appropriate source
+                if use_picamera2:
+                    cv_img = picam2.capture_array()
+                    # picamera2 with RGB888 gives RGB, convert to BGR for OpenCV
+                    cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
+                    ret = True
+                else:
+                    ret, cv_img = cap.read()
+                
                 if ret:
                     # Logic based on mode
                     if self.mode == "RECOGNITION":
@@ -138,7 +174,10 @@ class VideoThread(QThread):
                     p = convert_to_Qt_format.scaled(640, 480, Qt.KeepAspectRatio)
                     self.change_pixmap_signal.emit(p)
         finally:
-            cap.release()
+            if use_picamera2 and picam2:
+                picam2.stop()
+            elif cap:
+                cap.release()
 
     def start_capture(self, user_id, user_name):
         self.capture_id = user_id
