@@ -89,9 +89,11 @@ class VideoThread(QThread):
             while self._run_flag:
                 # Get frame from appropriate source
                 if use_picamera2:
+                    print("DEBUG: Capturing with picamera2...")
                     cv_img = picam2.capture_array()
-                    # picamera2 typically returns BGR or we should rely on Qt conversion later
-                    # If previously swapped, let's remove the forced swap.
+                    print("DEBUG: Capture complete.")
+                    
+                    # Fix: Picamera2 RGB888 -> OpenCV BGR
                     # cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
                     ret = True
                 else:
@@ -101,12 +103,16 @@ class VideoThread(QThread):
                     # Logic based on mode
                     if self.mode == "RECOGNITION":
                         if self.recognizer:
+                            print("DEBUG: Calling recognize_faces...")
                             locations, names = self.recognizer.recognize_faces(cv_img)
+                            print(f"DEBUG: Recognized {len(names)} faces.")
+                            
                             # Draw and Emit
                             # Recognizer now returns (x, y, w, h)
                             for (x, y, w, h), name in zip(locations, names):
                                 left, top, right, bottom = x, y, x+w, y+h
                                 
+                                # ... (Drawing logic) ...
                                 if name != "Unknown":
                                     # Multi-frame verification
                                     if name == last_recognized_name:
