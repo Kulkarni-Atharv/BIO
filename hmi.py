@@ -80,19 +80,26 @@ class VideoThread(QThread):
             print("ERROR: Could not open any camera")
             return
         
+        if not use_picamera2 and (not cap or not cap.isOpened()):
+            print("ERROR: Could not open any camera")
+            return
+        
         last_attendance_time = {}
         last_recognized_name = None
         consecutive_frames = 0
         COOLDOWN = 10 # seconds
+        
+        # Optimization: Process AI every N frames
+        frame_count = 0
+        SKIP_FRAMES = 3 
+        last_locations = []
+        last_names = []
 
         try:
             while self._run_flag:
                 # Get frame from appropriate source
                 if use_picamera2:
-                    print("DEBUG: Capturing with picamera2...")
                     cv_img = picam2.capture_array()
-                    print("DEBUG: Capture complete.")
-                    
                     # Fix: Picamera2 RGB888 -> OpenCV BGR
                     # cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
                     ret = True
@@ -100,38 +107,47 @@ class VideoThread(QThread):
                     ret, cv_img = cap.read()
                 
                 if ret:
+                    frame_count += 1
+                    
                     # Logic based on mode
                     if self.mode == "RECOGNITION":
                         if self.recognizer:
-                            print("DEBUG: Calling recognize_faces...")
-                            locations, names = self.recognizer.recognize_faces(cv_img)
-                            print(f"DEBUG: Recognized {len(names)} faces.")
+                            # AI Inference (Heavy) - Run every SKIP_FRAMES
+                            if frame_count % SKIP_FRAMES == 0:
+                                last_locations, last_names = self.recognizer.recognize_faces(cv_img)
                             
-                            # Draw and Emit
-                            # Recognizer now returns (x, y, w, h)
-                            for (x, y, w, h), name in zip(locations, names):
+                            # Draw Results (Fast) - Run every frame using LATEST data
+                            for (x, y, w, h), name in zip(last_locations, last_names):
                                 left, top, right, bottom = x, y, x+w, y+h
                                 
-                                # ... (Drawing logic) ...
                                 if name != "Unknown":
                                     # Multi-frame verification
-                                    if name == last_recognized_name:
-                                        consecutive_frames += 1
-                                    else:
-                                        last_recognized_name = name
-                                        consecutive_frames = 1
+                                    # Update counters only on PROCESSED frames to match time logic?
+                                    # Or just update whenever we DRAW?
+                                    # If we track "consecutive frames", and we simply repeat the result 3 times,
+                                    # then 1 actual detection = 3 consecutive frames.
+                                    # This effectively lowers the threshold.
+                                    # To keep logic consistent, we should only update logic on AI frames.
                                     
-                                    # Visual feedback (Yellow for verifying, Green for verified)
+                                    if frame_count % SKIP_FRAMES == 0:
+                                        if name == last_recognized_name:
+                                            consecutive_frames += 1
+                                        else:
+                                            last_recognized_name = name
+                                            consecutive_frames = 1
+                                        
+                                        # Verification Check (only on AI frame)
+                                        if consecutive_frames >= VERIFICATION_FRAMES:
+                                            now = time.time()
+                                            if name not in last_attendance_time or (now - last_attendance_time.get(name, 0) > COOLDOWN):
+                                                self.attendance_signal.emit(name)
+                                                last_attendance_time[name] = now
+                                    
+                                    # Visual feedback
                                     color = (0, 255, 255) # Yellow
+                                    # We use the 'consecutive_frames' state which persists between AI frames
                                     if consecutive_frames >= VERIFICATION_FRAMES:
                                         color = (0, 255, 0) # Green
-                                        
-                                        now = time.time()
-                                        if name not in last_attendance_time or (now - last_attendance_time.get(name, 0) > COOLDOWN):
-                                            self.attendance_signal.emit(name)
-                                            last_attendance_time[name] = now
-                                    else:
-                                        pass # Just waiting for more frames
 
                                     cv2.rectangle(cv_img, (left, top), (right, bottom), color, 2)
                                     status_text = f"{name}"
@@ -143,10 +159,11 @@ class VideoThread(QThread):
                                      cv2.rectangle(cv_img, (left, top), (right, bottom), (0, 0, 255), 2)
                                      cv2.putText(cv_img, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
                         
-                        # Reset counter if no faces found
-                        if not names and last_recognized_name is not None:
-                             last_recognized_name = None
-                             consecutive_frames = 0
+                        # Reset counter if no faces found (logic only on AI frames)
+                        if frame_count % SKIP_FRAMES == 0:
+                            if not last_names and last_recognized_name is not None:
+                                 last_recognized_name = None
+                                 consecutive_frames = 0
                     
                     elif self.mode == "CAPTURE":
                         # Just detect to show user face is found
