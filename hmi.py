@@ -46,11 +46,8 @@ class VideoThread(QThread):
         cv2.setNumThreads(1)
         cv2.ocl.setUseOpenCL(False)
 
-        # Initialize Recognizer here (Worker Thread) to avoid thread affinity issues
-        if self.recognizer is None:
-            self.recognizer = FaceRecognizer()
-
-        # Try multiple camera backends
+        # Try multiple camera backends FIRST (before loading models)
+        # This prevents memory conflicts on CM4 where libcamera and OpenCV DNN compete for GPU
         cap = None
         picam2 = None
         use_picamera2 = False
@@ -68,14 +65,11 @@ class VideoThread(QThread):
                 use_picamera2 = True
                 print("Using picamera2 (Color Mode Enabled, OpenCL Disabled)")
                 
-                # Warmup
+                # Warmup - wait for camera to stabilize
                 time.sleep(2.0)
             except Exception as e:
                 print(f"picamera2 failed: {e}")
                 use_picamera2 = False
-        
-        # Signal that we're ready
-        self.ready_signal.emit()
         
         # Option 2: Try V4L2 backend (USB cameras on Linux)
         if not use_picamera2:
@@ -88,6 +82,16 @@ class VideoThread(QThread):
         if not use_picamera2 and (not cap or not cap.isOpened()):
             print("ERROR: Could not open any camera")
             return
+        
+        # NOW initialize Recognizer AFTER camera is stable
+        # This prevents libcamera and OpenCV DNN from competing for memory
+        print("Camera ready. Loading face recognition models...")
+        if self.recognizer is None:
+            self.recognizer = FaceRecognizer()
+        print("Face recognition models loaded.")
+        
+        # Signal that we're ready
+        self.ready_signal.emit()
         
         last_attendance_time = {}
         last_recognized_name = None

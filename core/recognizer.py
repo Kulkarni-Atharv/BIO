@@ -41,20 +41,34 @@ class FaceRecognizer:
         self.recognizer = None
         self.known_embeddings = []
         self.known_names = []
+        self._initialized = False
         
         self._load_models()
         self._load_database()
 
     def _load_models(self):
-        if not os.path.exists(self.yunet_path) or not os.path.exists(self.mobilefacenet_path):
-            logger.error("Models not found.")
-            return
+        try:
+            if not os.path.exists(self.yunet_path) or not os.path.exists(self.mobilefacenet_path):
+                logger.error("Models not found.")
+                return
 
-        self.detector = cv2.FaceDetectorYN.create(
-            self.yunet_path, "", (320, 320), DETECTION_THRESHOLD, 0.3, 5000
-        )
-        self.recognizer = cv2.dnn.readNetFromONNX(self.mobilefacenet_path)
-        logger.info("Models loaded successfully.")
+            logger.info(f"Loading YuNet from {self.yunet_path}...")
+            self.detector = cv2.FaceDetectorYN.create(
+                self.yunet_path, "", (320, 320), DETECTION_THRESHOLD, 0.3, 5000
+            )
+            
+            logger.info(f"Loading MobileFaceNet from {self.mobilefacenet_path}...")
+            self.recognizer = cv2.dnn.readNetFromONNX(self.mobilefacenet_path)
+            
+            # Force CPU backend to avoid GPU memory issues on RPi
+            self.recognizer.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            self.recognizer.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            
+            self._initialized = True
+            logger.info("Models loaded successfully.")
+        except Exception as e:
+            logger.error(f"Failed to load models: {e}")
+            self._initialized = False
 
     def _load_database(self):
         if os.path.exists(self.embeddings_file) and os.path.exists(self.names_file):
@@ -98,7 +112,7 @@ class FaceRecognizer:
             if frame is None or frame.size == 0:
                 return [], []
             
-            if self.detector is None or self.recognizer is None:
+            if not self._initialized or self.detector is None or self.recognizer is None:
                 return [], []
 
             h, w = frame.shape[:2]
