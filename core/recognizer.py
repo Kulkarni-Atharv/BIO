@@ -66,6 +66,24 @@ class FaceRecognizer:
         else:
             logger.warning("No database found.")
 
+    def reload(self):
+        """Safe reload of the database"""
+        try:
+            if os.path.exists(self.embeddings_file) and os.path.exists(self.names_file):
+                # Load to temp variables first
+                new_embeddings = np.load(self.embeddings_file)
+                with open(self.names_file, 'r') as f:
+                    new_names = json.load(f)
+                
+                # Atomic swap
+                self.known_embeddings = new_embeddings
+                self.known_names = new_names
+                logger.info(f"Reloaded database: {len(self.known_embeddings)} identities.")
+                return True
+        except Exception as e:
+            logger.error(f"Reload failed: {e}")
+        return False
+
     def recognize_faces(self, frame):
         """
         Recognize faces in the given frame.

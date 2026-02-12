@@ -36,7 +36,8 @@ class VideoThread(QThread):
         self.capture_target = 30
         self.capture_dir = ""
         self.capture_id = ""
-        self.recognizer = None
+        self.recognizer = None 
+        self.reload_needed = False  # Flag for Hot Reloading
 
     def run(self):
         # FIX 1: Disable OpenCV OpenCL optimization to prevent conflict with libcamera on GPU
@@ -96,6 +97,13 @@ class VideoThread(QThread):
 
         try:
             while self._run_flag:
+                # HOT RELOAD CHECK
+                if self.reload_needed:
+                    print("Hot Reloading Model...")
+                    if self.recognizer:
+                        self.recognizer.reload()
+                    self.reload_needed = False
+
                 # Get frame from appropriate source
                 cv_img = None
                 
@@ -228,11 +236,9 @@ class VideoThread(QThread):
         self._run_flag = False
         self.wait()
 
-    def reload_model(self):
-        if self.isRunning():
-            self.recognizer = FaceRecognizer()
-        else:
-            self.recognizer = FaceRecognizer()
+    def request_reload(self):
+        """Thread-safe request to reload model"""
+        self.reload_needed = True
 
 
 class TrainThread(QThread):
@@ -329,12 +335,9 @@ class MainApp(QMainWindow):
         self.home_widget.setLayout(layout)
 
     def delete_user_action(self):
-        # Stop Recognition thread to prevent crash accessing deleted files
-        was_running = self.thread.isRunning()
-        if was_running:
-            self.thread.mode = "IDLE" # Pause recognition
-            time.sleep(0.5) # Wait for current processing to finish
-
+        # With Atomic updates, we DON'T need to stop recognition!
+        # Just delete and retrain.
+        
         known_faces_dir = KNOWN_FACES_DIR
         if not os.path.exists(known_faces_dir):
             QMessageBox.warning(self, "Error", "No known_faces directory found.")
@@ -358,13 +361,10 @@ class MainApp(QMainWindow):
                 try:
                     shutil.rmtree(os.path.join(known_faces_dir, user))
                     QMessageBox.information(self, "Success", f"User '{user}' deleted.")
-                    self.train_thread.start()
+                    self.train_thread.start() # Runs in background, writes to TMP files
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to delete user: {e}")
         
-        # Resume recognition
-        if was_running:
-            self.thread.mode = "RECOGNITION"
 
     def init_add_user_ui(self):
         layout = QVBoxLayout()
@@ -440,11 +440,13 @@ class MainApp(QMainWindow):
 
     def handle_training_finished(self, success, message):
         if success:
+            # THIS IS THE KEY FIX: Request reload instead of replacing object
+            self.thread.request_reload()
+            
             if self.stacked_widget.currentIndex() == 0:
-               self.thread.reload_model()
+               pass
             else:
                QMessageBox.information(self, "Success", f"User Registered!\n{message}")
-               self.thread.reload_model()
                self.btn_capture.setText("Start Capture (30 Images)")
                self.btn_capture.setEnabled(True)
                self.lbl_status.setText("Ready")

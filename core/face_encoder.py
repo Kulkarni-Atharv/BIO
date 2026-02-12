@@ -156,14 +156,31 @@ class FaceEncoder:
 
         # 3. Save Updates
         if count > 0 or deleted_count > 0:
-            np.save(self.embeddings_file, np.array(self.known_embeddings))
-            with open(self.names_file, 'w') as f:
-                json.dump(self.known_names, f)
+            # Atomic Write: Save to temp, then rename
+            temp_emb = self.embeddings_file + ".tmp"
+            temp_names = self.names_file + ".tmp"
             
-            with open(processed_log_path, 'w') as f:
-                json.dump(list(processed_files), f)
+            try:
+                np.save(temp_emb, np.array(self.known_embeddings))
+                with open(temp_names, 'w') as f:
+                    json.dump(self.known_names, f)
                 
-            logger.info(f"Changes saved. Added: {count}, Deleted: {deleted_count}. Total: {len(self.known_embeddings)}")
+                # Windows atomic rename requires destination to not exist or use replace
+                if os.path.exists(self.embeddings_file):
+                    os.remove(self.embeddings_file)
+                os.rename(temp_emb, self.embeddings_file)
+                
+                if os.path.exists(self.names_file):
+                    os.remove(self.names_file)
+                os.rename(temp_names, self.names_file)
+
+                # Update processed log
+                with open(processed_log_path, 'w') as f:
+                    json.dump(list(processed_files), f)
+                    
+                logger.info(f"Changes saved ATOMICALLY. Added: {count}, Deleted: {deleted_count}. Total: {len(self.known_embeddings)}")
+            except Exception as e:
+                logger.error(f"Atomic save failed: {e}")
         
         return True
 
