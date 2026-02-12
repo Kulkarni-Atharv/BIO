@@ -27,17 +27,19 @@ from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES
 class VideoThread(QThread):
     change_pixmap_signal = pyqtSignal(QImage)
     attendance_signal = pyqtSignal(str) # Emits name when recognized
+    ready_signal = pyqtSignal()  # Emitted when camera and recognizer are ready
 
     def __init__(self):
         super().__init__()
         self._run_flag = True
-        self.mode = "RECOGNITION" # or "CAPTURE"
+        self.mode = "RECOGNITION" # or "CAPTURE" or "PAUSED"
         self.capture_count = 0
         self.capture_target = 30
         self.capture_dir = ""
         self.capture_id = ""
         self.recognizer = None 
         self.reload_needed = False  # Flag for Hot Reloading
+        self._paused_for_training = False
 
     def run(self):
         # FIX 1: Disable OpenCV OpenCL optimization to prevent conflict with libcamera on GPU
@@ -72,6 +74,9 @@ class VideoThread(QThread):
                 print(f"picamera2 failed: {e}")
                 use_picamera2 = False
         
+        # Signal that we're ready
+        self.ready_signal.emit()
+        
         # Option 2: Try V4L2 backend (USB cameras on Linux)
         if not use_picamera2:
             cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
@@ -97,6 +102,11 @@ class VideoThread(QThread):
 
         try:
             while self._run_flag:
+                # Check if paused for training
+                if self._paused_for_training:
+                    time.sleep(0.1)
+                    continue
+                    
                 # HOT RELOAD CHECK
                 if self.reload_needed:
                     print("Hot Reloading Model...")
@@ -239,6 +249,15 @@ class VideoThread(QThread):
     def request_reload(self):
         """Thread-safe request to reload model"""
         self.reload_needed = True
+
+    def pause_for_training(self):
+        """Pause recognition to free up memory for training"""
+        self._paused_for_training = True
+        time.sleep(0.2)  # Give time for current frame to complete
+
+    def resume_after_training(self):
+        """Resume recognition after training completes"""
+        self._paused_for_training = False
 
 
 class TrainThread(QThread):
@@ -411,7 +430,9 @@ class MainApp(QMainWindow):
                 import shutil
                 try:
                     shutil.rmtree(os.path.join(known_faces_dir, user))
-                    QMessageBox.information(self, "Success", f"User '{user}' deleted.")
+                    QMessageBox.information(self, "Success", f"User '{user}' deleted. Retraining...")
+                    # Pause video thread to free memory for training
+                    self.thread.pause_for_training()
                     # Create new thread (QThread cannot be restarted after finishing)
                     self._create_train_thread()
                     self.train_thread.start()
@@ -471,6 +492,8 @@ class MainApp(QMainWindow):
             self.btn_capture.setText("Capture Done! Processing...")
             self.btn_capture.setEnabled(False)
             self.lbl_status.setText("Training Model... Please Wait.")
+            # Pause video thread to free memory for training
+            self.thread.pause_for_training()
             # Create new thread (QThread cannot be restarted after finishing)
             self._create_train_thread()
             self.train_thread.start()
@@ -494,6 +517,9 @@ class MainApp(QMainWindow):
         self.lbl_status.setText("Capturing...")
 
     def handle_training_finished(self, success, message):
+        # Resume video thread
+        self.thread.resume_after_training()
+        
         if success:
             # THIS IS THE KEY FIX: Request reload instead of replacing object
             self.thread.request_reload()
