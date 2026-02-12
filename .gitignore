@@ -1,19 +1,8 @@
-
-# Python
+data/local_config.json
+*.pyc
 __pycache__/
-*.py[cod]
-venv/
 .env
-
-# Database
-*.db
-*.sqlite3
-
-# Models (Download via script)
-*.onnx
-
-# Data (Privacy)
-known_faces/
-
-# Logs
-*.log
+.venv
+env/
+venv/
+.DS_Store
