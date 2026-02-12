@@ -24,6 +24,7 @@ MYSQL_PORT = 3306
 
 DB_PATH = os.path.join(DATA_DIR, "attendance_buffer.db")
 KNOWN_FACES_DIR = os.path.join(DATA_DIR, "known_faces")
+SQLITE_DB_PATH = os.path.join(DATA_DIR, "local_attendance.db")
 
 # Models & Embeddings
 YUNET_PATH = os.path.join(ASSETS_DIR, "face_detection_yunet_2023mar.onnx")

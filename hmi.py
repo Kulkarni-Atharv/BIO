@@ -12,19 +12,16 @@ try:
 except ImportError:
     PICAMERA2_AVAILABLE = False
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
- 
                              QHBoxLayout, QLabel, QPushButton, QLineEdit, 
                              QStackedWidget, QMessageBox, QListWidget)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap, QFont
-
 
 # Import modules
 from core.recognizer import FaceRecognizer
 from device.database import LocalDatabase
 from core.face_encoder import FaceEncoder
 from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES
-
 
 # --- Worker Thread for Video & Recognition ---
 class VideoThread(QThread):
@@ -39,16 +36,14 @@ class VideoThread(QThread):
         self.capture_target = 30
         self.capture_dir = ""
         self.capture_id = ""
-        
-        # Initialize Logic in RUN to avoid thread affinity issues
         self.recognizer = None
 
     def run(self):
-        # FIX: Disable OpenCV OpenCL optimization to prevent conflict with libcamera on GPU
+        # FIX 1: Disable OpenCV OpenCL optimization to prevent conflict with libcamera on GPU
         cv2.setNumThreads(1)
         cv2.ocl.setUseOpenCL(False)
 
-        # Initialize Recognizer here (Worker Thread)
+        # Initialize Recognizer here (Worker Thread) to avoid thread affinity issues
         if self.recognizer is None:
             self.recognizer = FaceRecognizer()
 
@@ -68,7 +63,10 @@ class VideoThread(QThread):
                 # Set controls to ensure color
                 picam2.set_controls({"AeEnable": True, "AwbEnable": True, "Saturation": 1.0, "AwbMode": 1}) # 1=Auto
                 use_picamera2 = True
-                print("Using picamera2 for CSI camera (Color Mode Enabled, OpenCL Disabled)")
+                print("Using picamera2 (Color Mode Enabled, OpenCL Disabled)")
+                
+                # Warmup
+                time.sleep(2.0)
             except Exception as e:
                 print(f"picamera2 failed: {e}")
                 use_picamera2 = False
@@ -96,26 +94,26 @@ class VideoThread(QThread):
         last_locations = []
         last_names = []
 
-        # WARMUP: Give camera time to start streams
-        if use_picamera2:
-            print("Warming up camera sequences...")
-            time.sleep(2.0)
-
         try:
             while self._run_flag:
                 # Get frame from appropriate source
                 cv_img = None
-                if use_picamera2:
-                    try:
-                        cv_img = picam2.capture_array()
-                        ret = True
-                    except Exception as e:
-                        print(f"Camera Capture Error (Segfault Prevention): {e}")
-                        ret = False
-                else:
-                    ret, cv_img = cap.read()
+                
+                try:
+                    if use_picamera2:
+                            cv_img = picam2.capture_array()
+                            ret = True
+                    else:
+                        ret, cv_img = cap.read()
+                except Exception as e:
+                    print(f"Capture Error: {e}")
+                    time.sleep(0.1)
+                    continue
                 
                 if ret and cv_img is not None:
+                    # Validate frame
+                    if cv_img.size == 0: continue
+
                     frame_count += 1
                     
                     # Logic based on mode
@@ -129,13 +127,11 @@ class VideoThread(QThread):
                                     print(f"Recognizer Error: {e}")
                                     last_locations, last_names = [], []
                             
-                            # Draw Results (Fast) - Run every frame using LATEST data
+                            # Draw Results (Fast)
                             for (x, y, w, h), name in zip(last_locations, last_names):
                                 left, top, right, bottom = x, y, x+w, y+h
                                 
                                 if name != "Unknown":
-                                    # Update logic only on AI frames to be consistent or use time-based logic always?
-                                    # Let's keep it simple: Update state only on AI frame match
                                     if frame_count % SKIP_FRAMES == 0:
                                         if name == last_recognized_name:
                                             consecutive_frames += 1
@@ -165,7 +161,7 @@ class VideoThread(QThread):
                                      cv2.rectangle(cv_img, (left, top), (right, bottom), (0, 0, 255), 2)
                                      cv2.putText(cv_img, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
                         
-                        # Reset counter if no faces found (logic only on AI frames)
+                        # Reset counter if no faces found
                         if frame_count % SKIP_FRAMES == 0:
                             if not last_names and last_recognized_name is not None:
                                  last_recognized_name = None
@@ -174,40 +170,45 @@ class VideoThread(QThread):
                     elif self.mode == "CAPTURE":
                         # Just detect to show user face is found
                         if self.recognizer and self.recognizer.detector:
-                            h, w, _ = cv_img.shape
-                            self.recognizer.detector.setInputSize((w, h))
-                            _, faces = self.recognizer.detector.detect(cv_img)
-                            
-                            if faces is not None:
-                                for face in faces:
-                                    box = face[:4].astype(int)
-                                    x, y, w_box, h_box = box[0], box[1], box[2], box[3]
-                                    cv2.rectangle(cv_img, (x, y), (x+w_box, y+h_box), (255, 0, 0), 2)
-                                    
-                                    # Capture logic
-                                    if self.capture_count < self.capture_target:
-                                        self.capture_count += 1
-                                        # Save
-                                        filename = f"{self.capture_dir}/User.{self.capture_id}.{self.capture_count}.jpg"
-                                        # Ensure bounds
-                                        x = max(0, x); y = max(0, y)
-                                        if w_box > 0 and h_box > 0:
-                                            crop = cv_img[y:y+h_box, x:x+w_box]
-                                            cv2.imwrite(filename, crop)
+                            try:
+                                h, w, _ = cv_img.shape
+                                self.recognizer.detector.setInputSize((w, h))
+                                _, faces = self.recognizer.detector.detect(cv_img)
+                                
+                                if faces is not None:
+                                    for face in faces:
+                                        box = face[:4].astype(int)
+                                        x, y, w_box, h_box = box[0], box[1], box[2], box[3]
+                                        cv2.rectangle(cv_img, (x, y), (x+w_box, y+h_box), (255, 0, 0), 2)
                                         
+                                        # Capture logic
+                                        if self.capture_count < self.capture_target:
+                                            self.capture_count += 1
+                                            filename = f"{self.capture_dir}/User.{self.capture_id}.{self.capture_count}.jpg"
+                                            x = max(0, x); y = max(0, y)
+                                            if w_box > 0 and h_box > 0:
+                                                crop = cv_img[y:y+h_box, x:x+w_box]
+                                                cv2.imwrite(filename, crop)
+                            except Exception as e:
+                                print(f"Capture Detect Error: {e}")
+
                         cv2.putText(cv_img, f"Captured: {self.capture_count}/{self.capture_target}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                         
                         if self.capture_count >= self.capture_target:
-                            self.mode = "IDLE" # Stop capturing
+                            self.mode = "IDLE" 
                             self.attendance_signal.emit("CAPTURE_COMPLETE")
 
                     # Convert to Qt Image
-                    rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-                    h, w, ch = rgb_image.shape
-                    bytes_per_line = ch * w
-                    convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-                    p = convert_to_Qt_format.scaled(640, 480, Qt.KeepAspectRatio)
-                    self.change_pixmap_signal.emit(p)
+                    try:
+                        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+                        h, w, ch = rgb_image.shape
+                        bytes_per_line = ch * w
+                        convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+                        p = convert_to_Qt_format.scaled(640, 480, Qt.KeepAspectRatio)
+                        self.change_pixmap_signal.emit(p)
+                    except Exception as e:
+                        print(f"Display Error: {e}")
+
         finally:
             if use_picamera2 and picam2:
                 picam2.stop()
@@ -228,17 +229,10 @@ class VideoThread(QThread):
         self.wait()
 
     def reload_model(self):
-        # We need to signal the thread to reload, safely.
-        # Simplest way: set flag, let run loop handle it or just re-init next frame?
-        # Actually simplest is to just re-instantiate in the run loop if a flag is set.
-        # But for now, we can just replace the object (atomic assignment in Python is generally safe for this usage)
         if self.isRunning():
             self.recognizer = FaceRecognizer()
         else:
             self.recognizer = FaceRecognizer()
-
-# ... (MainApp class remains mostly same, just skipped for brevity unless changes needed) ...
-# Actually we need to patch the __main__ block
 
 
 class TrainThread(QThread):
@@ -255,11 +249,25 @@ class TrainThread(QThread):
         except Exception as e:
             self.finished_signal.emit(False, str(e))
 
+class SyncThread(QThread):
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+        self._run_flag = True
+
+    def run(self):
+        while self._run_flag:
+            self.db.sync_to_mysql()
+            time.sleep(5) # Sync every 5 seconds
+
+    def stop(self):
+        self._run_flag = False
+        self.wait()
 
 class MainApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Attendance System (HMI)")
+        self.setWindowTitle("Smart Attendance System (Offline-First)")
         self.setGeometry(100, 100, 1000, 600)
         
         # Database
@@ -288,14 +296,17 @@ class MainApp(QMainWindow):
         self.train_thread = TrainThread()
         self.train_thread.finished_signal.connect(self.handle_training_finished)
 
+        # Start Sync Worker
+        self.sync_thread = SyncThread(self.db)
+        self.sync_thread.start()
+
     def init_home_ui(self):
         layout = QHBoxLayout()
-        # Left: Video
         self.video_label = QLabel("Loading Camera...")
         self.video_label.setFixedSize(640, 480)
         self.video_label.setStyleSheet("background-color: black;")
         layout.addWidget(self.video_label)
-        # Right: Sidebar
+        
         sidebar = QVBoxLayout()
         title = QLabel("Attendance Log")
         title.setFont(QFont("Arial", 16, QFont.Bold))
@@ -318,7 +329,12 @@ class MainApp(QMainWindow):
         self.home_widget.setLayout(layout)
 
     def delete_user_action(self):
-        # List users from known_faces directory
+        # Stop Recognition thread to prevent crash accessing deleted files
+        was_running = self.thread.isRunning()
+        if was_running:
+            self.thread.mode = "IDLE" # Pause recognition
+            time.sleep(0.5) # Wait for current processing to finish
+
         known_faces_dir = KNOWN_FACES_DIR
         if not os.path.exists(known_faces_dir):
             QMessageBox.warning(self, "Error", "No known_faces directory found.")
@@ -329,13 +345,12 @@ class MainApp(QMainWindow):
             QMessageBox.information(self, "Info", "No users found to delete.")
             return
 
-        # Show Selection Dialog
         from PyQt5.QtWidgets import QInputDialog
         user, ok = QInputDialog.getItem(self, "Delete User", "Select user to delete:", users, 0, False)
         
         if ok and user:
             confirm = QMessageBox.question(self, "Confirm Delete", 
-                                         f"Are you sure you want to delete '{user}'?\nThis cannot be undone.",
+                                         f"Are you sure you want to delete '{user}'?",
                                          QMessageBox.Yes | QMessageBox.No)
             
             if confirm == QMessageBox.Yes:
@@ -343,16 +358,13 @@ class MainApp(QMainWindow):
                 try:
                     shutil.rmtree(os.path.join(known_faces_dir, user))
                     QMessageBox.information(self, "Success", f"User '{user}' deleted.")
-                    
-                    # Retrain Model
-                    self.lbl_status_home = QLabel("Updating Model...") # Quick feedback hack, better to use status bar or just wait
-                    # Actually we don't have a status bar on home, let's just use the modal approach or run background
-                    # Since we have TrainThread, let's use it.
                     self.train_thread.start()
-                    QMessageBox.information(self, "Updating", "Model is updating in background...")
-                    
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to delete user: {e}")
+        
+        # Resume recognition
+        if was_running:
+            self.thread.mode = "RECOGNITION"
 
     def init_add_user_ui(self):
         layout = QVBoxLayout()
@@ -362,9 +374,9 @@ class MainApp(QMainWindow):
         layout.addWidget(header)
         form_layout = QHBoxLayout()
         self.input_name = QLineEdit()
-        self.input_name.setPlaceholderText("Enter Name (e.g., John)")
+        self.input_name.setPlaceholderText("Enter Name")
         self.input_id = QLineEdit()
-        self.input_id.setPlaceholderText("Enter ID (numeric)")
+        self.input_id.setPlaceholderText("Enter ID")
         form_layout.addWidget(self.input_name)
         form_layout.addWidget(self.input_id)
         layout.addLayout(form_layout)
@@ -378,8 +390,6 @@ class MainApp(QMainWindow):
         self.btn_capture = QPushButton("Start Capture (30 Images)")
         self.btn_capture.clicked.connect(self.start_capture)
         
-        # Training is now automatic, but we can keep a hidden or disabled button just in case, 
-        # or remove it. User asked for automatic. Let's show specific status button instead.
         self.lbl_status = QLabel("Ready")
         self.lbl_status.setAlignment(Qt.AlignCenter)
 
@@ -396,8 +406,6 @@ class MainApp(QMainWindow):
         self.stacked_widget.setCurrentIndex(index)
         if index == 0:
             self.thread.mode = "RECOGNITION"
-        elif index == 1:
-            pass
 
     def update_image(self, qt_img):
         if self.stacked_widget.currentIndex() == 0:
@@ -410,15 +418,14 @@ class MainApp(QMainWindow):
             self.btn_capture.setText("Capture Done! Processing...")
             self.btn_capture.setEnabled(False)
             self.lbl_status.setText("Training Model... Please Wait.")
-            
-            # Start Training Automatically
             self.train_thread.start()
             return
             
         name = payload
-        self.db.add_record(DEVICE_ID, name)
-        time_str = time.strftime("%H:%M:%S")
-        self.log_list.insertItem(0, f"[{time_str}] {name}")
+        # Log to SQLite (Offline First)
+        if self.db.log_attendance(DEVICE_ID, name):
+            time_str = time.strftime("%H:%M:%S")
+            self.log_list.insertItem(0, f"[{time_str}] {name} (Logged)")
 
     def start_capture(self):
         name = self.input_name.text().strip()
@@ -427,43 +434,34 @@ class MainApp(QMainWindow):
             QMessageBox.warning(self, "Input Error", "Please enter ID and Name.")
             return
         self.thread.start_capture(uid, name)
-        self.btn_capture.setText("Capturing... Look at Camera")
+        self.btn_capture.setText("Capturing...")
         self.btn_capture.setEnabled(False)
         self.lbl_status.setText("Capturing...")
 
     def handle_training_finished(self, success, message):
         if success:
-            # Check if this was triggered by delete or add
-            # Ideally distinguish, but generic message is fine
             if self.stacked_widget.currentIndex() == 0:
-               # Home screen (Delete action likely)
-               QMessageBox.information(self, "Success", "Model Updated Successfully.")
                self.thread.reload_model()
             else:
-               # Add screen
                QMessageBox.information(self, "Success", f"User Registered!\n{message}")
                self.thread.reload_model()
-               
-               # Reset UI
                self.btn_capture.setText("Start Capture (30 Images)")
                self.btn_capture.setEnabled(True)
-               self.lbl_status.setText("Ready (Model Updated)")
+               self.lbl_status.setText("Ready")
                self.input_name.clear()
                self.input_id.clear()
         else:
             QMessageBox.warning(self, "Error", f"Training Failed: {message}")
             if self.stacked_widget.currentIndex() == 1:
-                self.lbl_status.setText("Error")
                 self.btn_capture.setEnabled(True)
                 self.btn_capture.setText("Retry Capture")
 
     def closeEvent(self, event):
         self.thread.stop()
+        self.sync_thread.stop()
         event.accept()
 
 if __name__ == "__main__":
-    # Fix for OpenCV vs PyQt5 conflict
-    # Force usage of PyQt5 plugins inside the venv
     import PyQt5
     plugin_path = os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "plugins")
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = plugin_path
