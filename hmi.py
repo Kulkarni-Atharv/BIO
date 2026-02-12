@@ -85,6 +85,12 @@ class VideoThread(QThread):
         consecutive_frames = 0
         COOLDOWN = 10 # seconds
 
+        # [NEW] Frame Skipping for Performance
+        frame_count = 0
+        SKIP_FRAMES = 5  # Process every 5th frame
+        last_locations = []
+        last_names = []
+
         try:
                 # Get frame from appropriate source
                 if use_picamera2:
@@ -97,14 +103,17 @@ class VideoThread(QThread):
                     ret, cv_img = cap.read()
                 
                 if ret:
+                    frame_count += 1
+                    
                     # Logic based on mode
                     if self.mode == "RECOGNITION":
                         if self.recognizer:
-                            locations, names = self.recognizer.recognize_faces(cv_img)
+                            if frame_count % SKIP_FRAMES == 0:
+                                last_locations, last_names = self.recognizer.recognize_faces(cv_img)
                             
-                            # Draw and Emit
+                            # Draw and Emit (Use LAST known results for smoothness)
                             # Recognizer now returns (x, y, w, h)
-                            for (x, y, w, h), name in zip(locations, names):
+                            for (x, y, w, h), name in zip(last_locations, last_names):
                                 left, top, right, bottom = x, y, x+w, y+h
                                 
                                 # ... (Drawing logic) ...
@@ -138,10 +147,11 @@ class VideoThread(QThread):
                                      cv2.rectangle(cv_img, (left, top), (right, bottom), (0, 0, 255), 2)
                                      cv2.putText(cv_img, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
                         
-                        # Reset counter if no faces found
-                        if not names and last_recognized_name is not None:
-                             last_recognized_name = None
-                             consecutive_frames = 0
+                        # Reset counter if no faces found (in the processed frame)
+                        if frame_count % SKIP_FRAMES == 0:
+                            if not last_names and last_recognized_name is not None:
+                                 last_recognized_name = None
+                                 consecutive_frames = 0
                     
                     elif self.mode == "CAPTURE":
                         # Just detect to show user face is found
