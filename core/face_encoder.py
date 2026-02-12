@@ -161,6 +161,11 @@ class FaceEncoder:
             temp_names = self.names_file + ".tmp"
             
             try:
+                # Ensure data directory exists
+                data_dir = os.path.dirname(self.embeddings_file)
+                if not os.path.exists(data_dir):
+                    os.makedirs(data_dir)
+                
                 np.save(temp_emb, np.array(self.known_embeddings))
                 with open(temp_names, 'w') as f:
                     json.dump(self.known_names, f)

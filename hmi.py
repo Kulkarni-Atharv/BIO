@@ -290,6 +290,10 @@ class MainApp(QMainWindow):
 
     def _ensure_directories(self):
         """Ensure required directories exist"""
+        from shared.config import DATA_DIR
+        if not os.path.exists(DATA_DIR):
+            os.makedirs(DATA_DIR)
+            print(f"Created directory: {DATA_DIR}")
         if not os.path.exists(KNOWN_FACES_DIR):
             os.makedirs(KNOWN_FACES_DIR)
             print(f"Created directory: {KNOWN_FACES_DIR}")
