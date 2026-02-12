@@ -44,6 +44,10 @@ class VideoThread(QThread):
         self.recognizer = None
 
     def run(self):
+        # FIX: Disable OpenCV OpenCL optimization to prevent conflict with libcamera on GPU
+        cv2.setNumThreads(1)
+        cv2.ocl.setUseOpenCL(False)
+
         # Initialize Recognizer here (Worker Thread)
         if self.recognizer is None:
             self.recognizer = FaceRecognizer()
@@ -57,13 +61,14 @@ class VideoThread(QThread):
         if PICAMERA2_AVAILABLE:
             try:
                 picam2 = Picamera2()
-                config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+                # Use buffer_count=3 to prevent underruns
+                config = picam2.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"}, buffer_count=3)
                 picam2.configure(config)
                 picam2.start()
                 # Set controls to ensure color
                 picam2.set_controls({"AeEnable": True, "AwbEnable": True, "Saturation": 1.0, "AwbMode": 1}) # 1=Auto
                 use_picamera2 = True
-                print("Using picamera2 for CSI camera (Color Mode Enabled)")
+                print("Using picamera2 for CSI camera (Color Mode Enabled, OpenCL Disabled)")
             except Exception as e:
                 print(f"picamera2 failed: {e}")
                 use_picamera2 = False
