@@ -67,62 +67,108 @@ class FaceRecognizer:
             logger.warning("No database found.")
 
     def recognize_faces(self, frame):
-        if self.detector is None or self.recognizer is None:
-            return [], []
+        """
+        Recognize faces in the given frame.
+        Returns: (face_locations, face_names) where locations are (x,y,w,h) tuples
+        """
+        try:
+            # Validate input
+            if frame is None or frame.size == 0:
+                return [], []
+            
+            if self.detector is None or self.recognizer is None:
+                return [], []
 
-        h, w, _ = frame.shape
-        self.detector.setInputSize((w, h))
-        
-        _, faces = self.detector.detect(frame)
-        
-        face_locations = []
-        face_names = []
+            h, w = frame.shape[:2]
+            if h < 10 or w < 10:
+                return [], []
+            
+            self.detector.setInputSize((w, h))
+            
+            _, faces = self.detector.detect(frame)
+            
+            face_locations = []
+            face_names = []
 
-        if faces is not None:
-            for face in faces:
-                # Bounding Box
-                box = face[:4].astype(int)
-                x, y, w_box, h_box = box[0], box[1], box[2], box[3]
-                
-                # Landmarks for alignment
-                landmarks = face[4:14].reshape((5, 2))
-                
-                face_locations.append((x, y, w_box, h_box))
-                
-                # Alignment
-                # Alignment
-                face_img = None
-                name = "Unknown"
-                
-                if aligner:
+            if faces is not None and len(faces) > 0:
+                for face in faces:
                     try:
-                        face_img = aligner.align(frame, landmarks)
-                        if face_img is not None:
-                            # MobileFaceNet expects RGB. aligner returns same as input (BGR if frame is BGR).
-                            # We need to ensure blobFromImage parameters are correct.
-                            # blobFromImage takes BGR if swapRB=True --> RGB.
-                            # Our previous code used `swapRB=True`.
-                            
-                            # Get embedding
-                            blob = cv2.dnn.blobFromImage(face_img, 1.0/128.0, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
-                            self.recognizer.setInput(blob)
-                            embedding = self.recognizer.forward()
-                            embedding_norm = cv2.normalize(embedding, None, alpha=1, beta=0, norm_type=cv2.NORM_L2)
-                            
-                            # Compare
-                            if len(self.known_embeddings) > 0:
-                                scores = np.dot(self.known_embeddings, embedding_norm.T).flatten()
-                                best_match_idx = np.argmax(scores)
-                                max_score = scores[best_match_idx]
+                        # Bounding Box
+                        box = face[:4].astype(int)
+                        x, y, w_box, h_box = box[0], box[1], box[2], box[3]
+                        
+                        # Validate bounding box
+                        if w_box <= 0 or h_box <= 0:
+                            continue
+                        
+                        # Landmarks for alignment
+                        landmarks = face[4:14].reshape((5, 2))
+                        
+                        face_locations.append((x, y, w_box, h_box))
+                        
+                        name = "Unknown"
+                        
+                        if aligner:
+                            try:
+                                face_img = aligner.align(frame, landmarks)
                                 
-                                if max_score > RECOGNITION_THRESHOLD:
-                                    name = self.known_names[best_match_idx]
+                                if face_img is not None and face_img.size > 0:
+                                    # Validate aligned face
+                                    if face_img.shape[0] != 112 or face_img.shape[1] != 112:
+                                        logger.warning(f"Invalid aligned face shape: {face_img.shape}")
+                                        face_names.append(name)
+                                        continue
+                                    
+                                    # Get embedding with error handling
+                                    blob = cv2.dnn.blobFromImage(
+                                        face_img, 
+                                        1.0/128.0, 
+                                        (112, 112), 
+                                        (127.5, 127.5, 127.5), 
+                                        swapRB=True
+                                    )
+                                    
+                                    if blob is None or blob.size == 0:
+                                        face_names.append(name)
+                                        continue
+                                    
+                                    self.recognizer.setInput(blob)
+                                    embedding = self.recognizer.forward()
+                                    
+                                    if embedding is None or embedding.size == 0:
+                                        face_names.append(name)
+                                        continue
+                                    
+                                    embedding_norm = cv2.normalize(
+                                        embedding, 
+                                        None, 
+                                        alpha=1, 
+                                        beta=0, 
+                                        norm_type=cv2.NORM_L2
+                                    )
+                                    
+                                    # Compare with known embeddings
+                                    if len(self.known_embeddings) > 0:
+                                        scores = np.dot(self.known_embeddings, embedding_norm.T).flatten()
+                                        best_match_idx = np.argmax(scores)
+                                        max_score = scores[best_match_idx]
+                                        
+                                        if max_score > RECOGNITION_THRESHOLD:
+                                            name = self.known_names[best_match_idx]
+                                            
+                            except cv2.error as e:
+                                logger.error(f"OpenCV error during recognition: {e}")
+                            except Exception as e:
+                                logger.error(f"Recognition error: {e}")
+                        
+                        face_names.append(name)
+                        
                     except Exception as e:
-                        logger.error(f"Inference error: {e}")
-                else:
-                    # Fallback (same as original logic but inside else)
-                    pass 
+                        logger.error(f"Error processing face: {e}")
+                        continue
 
-                face_names.append(name)
-
-        return face_locations, face_names
+            return face_locations, face_names
+            
+        except Exception as e:
+            logger.error(f"Critical error in recognize_faces: {e}")
+            return [], []
