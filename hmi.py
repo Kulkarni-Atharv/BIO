@@ -246,6 +246,10 @@ class TrainThread(QThread):
 
     def run(self):
         try:
+            # Disable OpenCV multi-threading to prevent GPU/memory conflicts on RPi
+            cv2.setNumThreads(1)
+            cv2.ocl.setUseOpenCL(False)
+            
             encoder = FaceEncoder()
             success = encoder.process_images()
             if success:
@@ -253,6 +257,8 @@ class TrainThread(QThread):
             else:
                 self.finished_signal.emit(False, "No embeddings generated")
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.finished_signal.emit(False, str(e))
 
 class SyncThread(QThread):

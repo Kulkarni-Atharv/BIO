@@ -28,6 +28,10 @@ except ImportError:
 
 class FaceRecognizer:
     def __init__(self):
+        # Disable OpenCV multi-threading to prevent GPU/memory conflicts on RPi
+        cv2.setNumThreads(1)
+        cv2.ocl.setUseOpenCL(False)
+        
         self.yunet_path = YUNET_PATH
         self.mobilefacenet_path = MOBILEFACENET_PATH
         self.embeddings_file = EMBEDDINGS_FILE

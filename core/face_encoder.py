@@ -28,6 +28,10 @@ except ImportError:
 
 class FaceEncoder:
     def __init__(self):
+        # Disable OpenCV multi-threading to prevent GPU/memory conflicts on RPi
+        cv2.setNumThreads(1)
+        cv2.ocl.setUseOpenCL(False)
+        
         self.yunet_path = YUNET_PATH
         self.mobilefacenet_path = MOBILEFACENET_PATH
         self.embeddings_file = EMBEDDINGS_FILE
@@ -197,15 +201,26 @@ class FaceEncoder:
         else:
             user_name = folder_name
 
-        img = cv2.imread(img_path)
-        if img is None: return None, None
+        try:
+            img = cv2.imread(img_path)
+            if img is None: return None, None
+            
+            # Validate image dimensions
+            if len(img.shape) < 3:
+                return None, None
 
-        h, w, _ = img.shape
-        self.detector.setInputSize((w, h))
+            h, w, _ = img.shape
+            if h < 20 or w < 20:
+                return None, None
+                
+            self.detector.setInputSize((w, h))
 
-        _, faces = self.detector.detect(img)
-        
-        if faces is None or len(faces) == 0:
+            _, faces = self.detector.detect(img)
+            
+            if faces is None or len(faces) == 0:
+                return None, None
+        except Exception as e:
+            logger.error(f"Error reading/detecting in {img_path}: {e}")
             return None, None
 
         # Take largest face
