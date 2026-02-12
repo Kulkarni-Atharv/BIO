@@ -20,7 +20,7 @@ from PyQt5.QtGui import QImage, QPixmap, QFont
 # Import modules
 from core.recognizer import FaceRecognizer
 from device.database import LocalDatabase
-from core.face_encoder import FaceEncoder
+# FaceEncoder is run as subprocess to avoid memory conflicts on CM4
 from shared.config import DEVICE_ID, KNOWN_FACES_DIR, VERIFICATION_FRAMES
 
 # --- Worker Thread for Video & Recognition ---
@@ -265,16 +265,29 @@ class TrainThread(QThread):
 
     def run(self):
         try:
-            # Disable OpenCV multi-threading to prevent GPU/memory conflicts on RPi
-            cv2.setNumThreads(1)
-            cv2.ocl.setUseOpenCL(False)
+            import subprocess
+            import sys
             
-            encoder = FaceEncoder()
-            success = encoder.process_images()
-            if success:
+            # Run training in a separate process to isolate memory
+            # This prevents segfaults on memory-limited devices like CM4
+            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'core', 'face_encoder.py')
+            
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode == 0:
+                print(f"Training output: {result.stdout}")
                 self.finished_signal.emit(True, "Training Complete")
             else:
-                self.finished_signal.emit(False, "No embeddings generated")
+                print(f"Training error: {result.stderr}")
+                self.finished_signal.emit(False, f"Training failed: {result.stderr}")
+                
+        except subprocess.TimeoutExpired:
+            self.finished_signal.emit(False, "Training timed out")
         except Exception as e:
             import traceback
             traceback.print_exc()
