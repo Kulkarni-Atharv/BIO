@@ -276,8 +276,34 @@ class MainApp(QMainWindow):
         self.setWindowTitle("Smart Attendance System (Offline-First)")
         self.setGeometry(100, 100, 1000, 600)
         
+        # Ensure required directories exist
+        self._ensure_directories()
+        
+        # Check for required model files
+        self._check_models()
+        
         # Database
         self.db = LocalDatabase()
+
+    def _ensure_directories(self):
+        """Ensure required directories exist"""
+        if not os.path.exists(KNOWN_FACES_DIR):
+            os.makedirs(KNOWN_FACES_DIR)
+            print(f"Created directory: {KNOWN_FACES_DIR}")
+
+    def _check_models(self):
+        """Check if required AI models exist"""
+        from shared.config import YUNET_PATH, MOBILEFACENET_PATH
+        missing = []
+        if not os.path.exists(YUNET_PATH):
+            missing.append("YuNet face detector")
+        if not os.path.exists(MOBILEFACENET_PATH):
+            missing.append("MobileFaceNet recognizer")
+        
+        if missing:
+            msg = f"Missing AI models: {', '.join(missing)}\n\nRun 'python scripts/download_models.py' to download them."
+            print(f"WARNING: {msg}")
+            QMessageBox.warning(None, "Missing Models", msg)
 
         # Stacked Widget for Screens
         self.stacked_widget = QStackedWidget()
@@ -299,12 +325,22 @@ class MainApp(QMainWindow):
         self.thread.attendance_signal.connect(self.handle_attendance_signal)
         self.thread.start()
         
-        self.train_thread = TrainThread()
-        self.train_thread.finished_signal.connect(self.handle_training_finished)
+        self.train_thread = None  # Will be created on demand
 
         # Start Sync Worker
         self.sync_thread = SyncThread(self.db)
         self.sync_thread.start()
+
+    def _create_train_thread(self):
+        """Create a new TrainThread instance (QThread cannot be restarted)"""
+        if self.train_thread is not None:
+            # Ensure old thread is cleaned up
+            if self.train_thread.isRunning():
+                self.train_thread.wait()
+            self.train_thread.deleteLater()
+        
+        self.train_thread = TrainThread()
+        self.train_thread.finished_signal.connect(self.handle_training_finished)
 
     def init_home_ui(self):
         layout = QHBoxLayout()
@@ -361,7 +397,9 @@ class MainApp(QMainWindow):
                 try:
                     shutil.rmtree(os.path.join(known_faces_dir, user))
                     QMessageBox.information(self, "Success", f"User '{user}' deleted.")
-                    self.train_thread.start() # Runs in background, writes to TMP files
+                    # Create new thread (QThread cannot be restarted after finishing)
+                    self._create_train_thread()
+                    self.train_thread.start()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to delete user: {e}")
         
@@ -418,6 +456,8 @@ class MainApp(QMainWindow):
             self.btn_capture.setText("Capture Done! Processing...")
             self.btn_capture.setEnabled(False)
             self.lbl_status.setText("Training Model... Please Wait.")
+            # Create new thread (QThread cannot be restarted after finishing)
+            self._create_train_thread()
             self.train_thread.start()
             return
             
