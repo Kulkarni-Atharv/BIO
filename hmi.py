@@ -80,10 +80,6 @@ class VideoThread(QThread):
             print("ERROR: Could not open any camera")
             return
         
-        if not use_picamera2 and (not cap or not cap.isOpened()):
-            print("ERROR: Could not open any camera")
-            return
-        
         last_attendance_time = {}
         last_recognized_name = None
         consecutive_frames = 0
@@ -95,18 +91,26 @@ class VideoThread(QThread):
         last_locations = []
         last_names = []
 
+        # WARMUP: Give camera time to start streams
+        if use_picamera2:
+            print("Warming up camera sequences...")
+            time.sleep(2.0)
+
         try:
             while self._run_flag:
                 # Get frame from appropriate source
+                cv_img = None
                 if use_picamera2:
-                    cv_img = picam2.capture_array()
-                    # Fix: Picamera2 RGB888 -> OpenCV BGR
-                    # cv_img = cv2.cvtColor(cv_img, cv2.COLOR_RGB2BGR)
-                    ret = True
+                    try:
+                        cv_img = picam2.capture_array()
+                        ret = True
+                    except Exception as e:
+                        print(f"Camera Capture Error (Segfault Prevention): {e}")
+                        ret = False
                 else:
                     ret, cv_img = cap.read()
                 
-                if ret:
+                if ret and cv_img is not None:
                     frame_count += 1
                     
                     # Logic based on mode
@@ -114,21 +118,19 @@ class VideoThread(QThread):
                         if self.recognizer:
                             # AI Inference (Heavy) - Run every SKIP_FRAMES
                             if frame_count % SKIP_FRAMES == 0:
-                                last_locations, last_names = self.recognizer.recognize_faces(cv_img)
+                                try:
+                                    last_locations, last_names = self.recognizer.recognize_faces(cv_img)
+                                except Exception as e:
+                                    print(f"Recognizer Error: {e}")
+                                    last_locations, last_names = [], []
                             
                             # Draw Results (Fast) - Run every frame using LATEST data
                             for (x, y, w, h), name in zip(last_locations, last_names):
                                 left, top, right, bottom = x, y, x+w, y+h
                                 
                                 if name != "Unknown":
-                                    # Multi-frame verification
-                                    # Update counters only on PROCESSED frames to match time logic?
-                                    # Or just update whenever we DRAW?
-                                    # If we track "consecutive frames", and we simply repeat the result 3 times,
-                                    # then 1 actual detection = 3 consecutive frames.
-                                    # This effectively lowers the threshold.
-                                    # To keep logic consistent, we should only update logic on AI frames.
-                                    
+                                    # Update logic only on AI frames to be consistent or use time-based logic always?
+                                    # Let's keep it simple: Update state only on AI frame match
                                     if frame_count % SKIP_FRAMES == 0:
                                         if name == last_recognized_name:
                                             consecutive_frames += 1
@@ -136,7 +138,7 @@ class VideoThread(QThread):
                                             last_recognized_name = name
                                             consecutive_frames = 1
                                         
-                                        # Verification Check (only on AI frame)
+                                        # Verification Check
                                         if consecutive_frames >= VERIFICATION_FRAMES:
                                             now = time.time()
                                             if name not in last_attendance_time or (now - last_attendance_time.get(name, 0) > COOLDOWN):
@@ -145,7 +147,6 @@ class VideoThread(QThread):
                                     
                                     # Visual feedback
                                     color = (0, 255, 255) # Yellow
-                                    # We use the 'consecutive_frames' state which persists between AI frames
                                     if consecutive_frames >= VERIFICATION_FRAMES:
                                         color = (0, 255, 0) # Green
 
