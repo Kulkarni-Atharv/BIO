@@ -284,6 +284,9 @@ class MainApp(QMainWindow):
         
         # Database
         self.db = LocalDatabase()
+        
+        # Initialize UI and workers (after db is ready)
+        self._init_ui_and_workers()
 
     def _ensure_directories(self):
         """Ensure required directories exist"""
@@ -305,6 +308,8 @@ class MainApp(QMainWindow):
             print(f"WARNING: {msg}")
             QMessageBox.warning(None, "Missing Models", msg)
 
+    def _init_ui_and_workers(self):
+        """Initialize UI components and worker threads"""
         # Stacked Widget for Screens
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
